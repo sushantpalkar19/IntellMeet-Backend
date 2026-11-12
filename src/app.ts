@@ -6,6 +6,10 @@ import { isDatabaseConnected, getDatabaseState } from './config/database.js';
 import authRoutes from './routes/authRoutes.js';
 import protectedRoutes from './routes/protectedRoutes.js';
 import workspaceRoutes from './routes/workspaceRoutes.js';
+import meetingRoutes from './routes/meetingRoutes.js';
+import recordingRoutes from './routes/recordingRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
+import analyticsRoutes from './routes/analyticsRoutes.js';
 
 const app = express();
 
@@ -20,7 +24,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // Request logging
-app.use(morgan('dev'));
+app.use(morgan('dev', { skip: (req) => req.path.startsWith('/api/v1/recordings/') && req.path.endsWith('/stream') }));
 
 // Body parsing
 app.use(express.json());
@@ -30,6 +34,10 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/protected', protectedRoutes);
 app.use('/api/v1/workspaces', workspaceRoutes);
+app.use('/api/v1/meetings', meetingRoutes);
+app.use('/api/v1/recordings', recordingRoutes);
+app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/analytics', analyticsRoutes);
 
 // Health check endpoint
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -76,7 +84,11 @@ app.use((req: Request, res: Response) => {
 
 // Global error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('Error:', err);
+  console.error('Error:', err.message);
+  if (err.name === 'PayloadTooLargeError' || (err as Error & { type?: string }).type === 'entity.too.large') {
+    res.status(413).json({ error: 'Payload Too Large', message: 'Audio chunk exceeds the 2 MB limit' });
+    return;
+  }
   res.status(500).json({
     error: 'Internal Server Error',
     message: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred',

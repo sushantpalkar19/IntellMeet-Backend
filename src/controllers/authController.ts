@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import User from '../models/User.js';
 import { hashPassword, comparePassword } from '../utils/password.js';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken, TokenPayload } from '../utils/jwt.js';
-import { registerSchema, loginSchema, refreshTokenSchema, RegisterInput, LoginInput, RefreshTokenInput } from '../validators/authValidator.js';
+import { registerSchema, loginSchema, refreshTokenSchema, changePasswordSchema, RegisterInput, LoginInput, RefreshTokenInput } from '../validators/authValidator.js';
 
 /**
  * Register a new user
@@ -63,6 +63,7 @@ export async function register(req: Request, res: Response): Promise<void> {
         lastName: user.lastName,
         avatar: user.avatar,
         createdAt: user.createdAt,
+        mustChangePassword: user.mustChangePassword,
       },
       accessToken,
       refreshToken,
@@ -73,6 +74,32 @@ export async function register(req: Request, res: Response): Promise<void> {
       error: 'Internal Server Error',
       message: 'Failed to register user',
     });
+  }
+}
+
+export async function changePassword(req: Request, res: Response): Promise<void> {
+  try {
+    const parsed = changePasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation Error', message: parsed.error.issues[0]?.message || 'Invalid password' });
+      return;
+    }
+    if (!req.userId) {
+      res.status(401).json({ error: 'Unauthorized', message: 'User not authenticated' });
+      return;
+    }
+    const user = await User.findById(req.userId).select('+passwordHash');
+    if (!user || !(await comparePassword(parsed.data.currentPassword, user.passwordHash))) {
+      res.status(400).json({ error: 'Invalid Password', message: 'Current password is incorrect' });
+      return;
+    }
+    user.passwordHash = await hashPassword(parsed.data.newPassword);
+    user.mustChangePassword = false;
+    await user.save();
+    res.status(200).json({ message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'Internal Server Error', message: 'Failed to change password' });
   }
 }
 
@@ -132,6 +159,7 @@ export async function login(req: Request, res: Response): Promise<void> {
         lastName: user.lastName,
         avatar: user.avatar,
         createdAt: user.createdAt,
+        mustChangePassword: user.mustChangePassword,
       },
       accessToken,
       refreshToken,

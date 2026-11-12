@@ -2,6 +2,8 @@ import { Request, Response } from 'express';
 import Workspace from '../models/Workspace.js';
 import WorkspaceMember, { WorkspaceRole } from '../models/WorkspaceMember.js';
 import User from '../models/User.js';
+import { hashPassword } from '../utils/password.js';
+import { addMemberSchema } from '../validators/workspaceValidator.js';
 
 /**
  * Get all workspaces for the authenticated user
@@ -311,7 +313,12 @@ export async function getWorkspaceMembers(req: Request, res: Response): Promise<
 export async function addMember(req: Request, res: Response): Promise<void> {
   try {
     const { workspaceId, userRole } = req;
-    const { email, role = WorkspaceRole.MEMBER } = req.body;
+    const parsed = addMemberSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Validation Error', message: parsed.error.issues[0]?.message || 'Invalid member details' });
+      return;
+    }
+    const { email, password, role } = parsed.data;
 
     if (!workspaceId) {
       res.status(400).json({
@@ -330,15 +337,32 @@ export async function addMember(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Find user by email
-    const user = await User.findOne({ email: email.toLowerCase() });
-
-    if (!user) {
-      res.status(404).json({
-        error: 'Not Found',
-        message: 'User not found',
-      });
+    if (role === WorkspaceRole.OWNER) {
+      res.status(400).json({ error: 'Bad Request', message: 'Cannot add member as owner. Use ownership transfer instead.' });
       return;
+    }
+
+    let user = await User.findOne({ email });
+    const isExistingUser = Boolean(user);
+    if (!user && !password) {
+      res.status(400).json({ error: 'Validation Error', message: 'A temporary password is required for a new account' });
+      return;
+    }
+    let createdUserId: string | null = null;
+    if (!user) {
+      const passwordHash = await hashPassword(password!);
+      const name = email.split('@')[0].replace(/[._-]+/g, ' ').trim() || 'Team Member';
+      const nameParts = name.split(/\s+/);
+      user = new User({ email, passwordHash, firstName: nameParts[0], lastName: nameParts.slice(1).join(' ') || 'Member', mustChangePassword: true });
+      try {
+        await user.save();
+        createdUserId = user._id.toString();
+      } catch (error) {
+        if ((error as { code?: number }).code === 11000) {
+          user = await User.findOne({ email });
+          if (!user) throw error;
+        } else throw error;
+      }
     }
 
     // Check if user is already a member
@@ -355,15 +379,6 @@ export async function addMember(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Cannot add owner role
-    if (role === WorkspaceRole.OWNER) {
-      res.status(400).json({
-        error: 'Bad Request',
-        message: 'Cannot add member as owner. Use ownership transfer instead.',
-      });
-      return;
-    }
-
     // Add member
     const membership = new WorkspaceMember({
       workspaceId,
@@ -371,10 +386,19 @@ export async function addMember(req: Request, res: Response): Promise<void> {
       role,
     });
 
-    await membership.save();
+    try {
+      await membership.save();
+    } catch (error) {
+      if (createdUserId) await User.findByIdAndDelete(createdUserId);
+      if ((error as { code?: number }).code === 11000) {
+        res.status(409).json({ error: 'Conflict', message: 'User is already a member of this workspace' });
+        return;
+      }
+      throw error;
+    }
 
     res.status(201).json({
-      message: 'Member added successfully',
+      message: isExistingUser ? 'Existing account added to workspace' : 'Member account created and added to workspace',
       member: {
         id: membership._id,
         userId: user._id,

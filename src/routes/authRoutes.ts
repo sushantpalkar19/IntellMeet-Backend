@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { register, login, refreshToken, getProfile } from '../controllers/authController.js';
+import { register, login, refreshToken, getProfile, changePassword } from '../controllers/authController.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = Router();
@@ -24,6 +24,7 @@ router.post('/login', login);
  * @access  Public
  */
 router.post('/refresh', refreshToken);
+router.post('/change-password', authenticate, changePassword);
 
 /**
  * @route   GET /api/v1/auth/profile

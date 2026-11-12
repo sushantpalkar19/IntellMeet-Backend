@@ -11,13 +11,27 @@ import {
   removeMember,
 } from '../controllers/workspaceController.js';
 import { authenticate } from '../middleware/auth.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
+import { listProjects, createProject, updateProject, deleteProject, listProjectTasks, createProjectTask, updateProjectTask, deleteProjectTask } from '../controllers/workspaceProjectController.js';
 import {
   requireWorkspaceMembership,
   requireAdmin,
   requireOwner,
+  requireMember,
 } from '../middleware/workspaceAuth.js';
 
 const router = Router();
+
+// Workspace projects and Kanban tasks. Membership is checked on every route;
+// project administration is restricted to workspace admins/owners.
+router.get('/:workspaceId/projects', authenticate, requireWorkspaceMembership, asyncHandler(listProjects));
+router.post('/:workspaceId/projects', authenticate, requireWorkspaceMembership, requireAdmin, asyncHandler(createProject));
+router.put('/:workspaceId/projects/:projectId', authenticate, requireWorkspaceMembership, requireAdmin, asyncHandler(updateProject));
+router.delete('/:workspaceId/projects/:projectId', authenticate, requireWorkspaceMembership, requireAdmin, asyncHandler(deleteProject));
+router.get('/:workspaceId/projects/:projectId/tasks', authenticate, requireWorkspaceMembership, asyncHandler(listProjectTasks));
+router.post('/:workspaceId/projects/:projectId/tasks', authenticate, requireWorkspaceMembership, requireMember, asyncHandler(createProjectTask));
+router.put('/:workspaceId/projects/:projectId/tasks/:taskId', authenticate, requireWorkspaceMembership, requireMember, asyncHandler(updateProjectTask));
+router.delete('/:workspaceId/projects/:projectId/tasks/:taskId', authenticate, requireWorkspaceMembership, requireMember, asyncHandler(deleteProjectTask));
 
 /**
  * @route   GET /api/v1/workspaces

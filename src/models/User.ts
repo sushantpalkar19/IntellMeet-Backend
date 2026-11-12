@@ -5,6 +5,7 @@ export interface IUser extends Document {
   passwordHash: string;
   firstName: string;
   lastName: string;
+  mustChangePassword: boolean;
   avatar?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -34,6 +35,10 @@ const UserSchema: Schema = new Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    mustChangePassword: {
+      type: Boolean,
+      default: false,
     },
     avatar: {
       type: String,
