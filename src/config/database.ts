@@ -17,7 +17,8 @@ export async function connectDatabase(): Promise<void> {
     await mongoose.connect(uri);
     console.log('✅ MongoDB connected successfully');
   } catch (error) {
-    console.error('❌ MongoDB connection error:', error);
+    // Connection error messages can contain the MongoDB URI; log only a safe error type.
+    console.error('MongoDB connection failed:', error instanceof Error ? error.name : 'UnknownError');
     throw error;
   }
 }
@@ -31,7 +32,7 @@ export async function disconnectDatabase(): Promise<void> {
     await mongoose.disconnect();
     console.log('✅ MongoDB disconnected successfully');
   } catch (error) {
-    console.error('❌ MongoDB disconnection error:', error);
+    console.error('MongoDB disconnection failed:', error instanceof Error ? error.name : 'UnknownError');
     throw error;
   }
 }

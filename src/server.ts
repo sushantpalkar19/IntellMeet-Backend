@@ -19,7 +19,7 @@ async function startServer() {
     const io = initializeSocketIO(httpServer);
     startMeetingReminderScheduler();
 
-    const server = httpServer.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
       console.log(`🔌 Readiness check: http://localhost:${PORT}/api/ready`);
@@ -28,23 +28,22 @@ async function startServer() {
     });
 
     // Graceful shutdown
-    const shutdown = async (signal: string) => {
+    let shutdownStarted = false;
+    const shutdown = (signal: string) => {
+      if (shutdownStarted) return;
+      shutdownStarted = true;
       console.log(`${signal} signal received: closing server`);
       stopMeetingReminderScheduler();
-      
-      // Close Socket.IO
-      io.close(() => {
-        console.log('Socket.IO server closed');
-      });
 
-      server.close(async () => {
-        console.log('HTTP server closed');
+      // Socket.IO closes its attached HTTP server as part of close().
+      io.close(async () => {
+        console.log('Socket.IO and HTTP servers closed');
         try {
           await disconnectDatabase();
           console.log('Graceful shutdown complete');
           process.exit(0);
         } catch (error) {
-          console.error('Error during database disconnection:', error);
+          console.error('Database shutdown failed:', error instanceof Error ? error.name : 'UnknownError');
           process.exit(1);
         }
       });
@@ -54,7 +53,7 @@ async function startServer() {
     process.on('SIGINT', () => shutdown('SIGINT'));
 
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('Failed to start server:', error instanceof Error ? error.name : 'UnknownError');
     process.exit(1);
   }
 }

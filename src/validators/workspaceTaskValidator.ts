@@ -11,7 +11,7 @@ export const updateProjectSchema = createProjectSchema.partial().refine((value) 
 export const createWorkspaceTaskSchema = z.object({
   title: z.string().trim().min(1).max(200), description: z.string().trim().max(5000).optional().default(''),
   assigneeId: objectId.nullable().optional().default(null),
-  status: z.nativeEnum(WorkspaceTaskStatus).optional().default(WorkspaceTaskStatus.TODO),
-  priority: z.nativeEnum(WorkspaceTaskPriority).optional().default(WorkspaceTaskPriority.MEDIUM), dueDate,
+  status: z.enum(WorkspaceTaskStatus).optional().default(WorkspaceTaskStatus.TODO),
+  priority: z.enum(WorkspaceTaskPriority).optional().default(WorkspaceTaskPriority.MEDIUM), dueDate,
 });
 export const updateWorkspaceTaskSchema = createWorkspaceTaskSchema.partial().refine((value) => Object.keys(value).length > 0, 'Provide task fields to update.');

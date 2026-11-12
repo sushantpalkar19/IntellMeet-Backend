@@ -30,7 +30,7 @@ export const updateMeetingSchema = z.object({
 
 export const listMeetingsSchema = z.object({
   workspaceId: z.string().min(1, 'Workspace ID is required').optional(),
-  status: z.nativeEnum(MeetingStatus).optional(),
+  status: z.enum(MeetingStatus).optional(),
 });
 
 export type CreateMeetingInput = z.infer<typeof createMeetingSchema>;

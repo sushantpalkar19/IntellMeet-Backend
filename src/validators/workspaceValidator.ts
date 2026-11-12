@@ -38,7 +38,7 @@ export const addMemberSchema = z.object({
     .trim(),
   password: z.string().min(8, 'Password must be at least 8 characters').regex(/[A-Z]/, 'Password must contain at least one uppercase letter').regex(/[a-z]/, 'Password must contain at least one lowercase letter').regex(/[0-9]/, 'Password must contain at least one number').optional(),
   role: z
-    .nativeEnum(WorkspaceRole)
+    .enum(WorkspaceRole)
     .optional()
     .default(WorkspaceRole.MEMBER),
 });
@@ -48,7 +48,7 @@ export const updateMemberRoleSchema = z.object({
     .string()
     .min(1, 'Member ID is required'),
   role: z
-    .nativeEnum(WorkspaceRole),
+    .enum(WorkspaceRole),
 });
 
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceSchema>;
