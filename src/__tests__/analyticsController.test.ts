@@ -5,7 +5,7 @@ const mockSummaryCount = jest.fn(); const mockSummaryDistinct = jest.fn(); const
 const mockActionCount = jest.fn(); const mockRecordingCount = jest.fn(); const mockRecordingDistinct = jest.fn();
 const mockSummaryAggregate = jest.fn(); const mockRecordingAggregate = jest.fn();
 jest.mock('../models/WorkspaceMember.js', () => ({ __esModule: true, default: { find: mockMembershipFind } }));
-jest.mock('../models/Meeting.js', () => ({ __esModule: true, MeetingStatus: { SCHEDULED: 'scheduled' }, default: { aggregate: mockMeetingAggregate, countDocuments: mockMeetingCount, find: mockMeetingFind, collection: { name: 'meetings' } } }));
+jest.mock('../models/Meeting.js', () => ({ __esModule: true, MeetingStatus: { SCHEDULED: 'scheduled', LIVE: 'live' }, default: { aggregate: mockMeetingAggregate, countDocuments: mockMeetingCount, find: mockMeetingFind, collection: { name: 'meetings' } } }));
 jest.mock('../models/MeetingParticipant.js', () => ({ __esModule: true, default: { aggregate: mockParticipantAggregate } }));
 jest.mock('../models/WorkspaceTask.js', () => ({ __esModule: true, default: { aggregate: mockTaskAggregate } }));
 jest.mock('../models/MeetingSummary.js', () => ({ __esModule: true, default: { aggregate: mockSummaryAggregate, countDocuments: mockSummaryCount, distinct: mockSummaryDistinct } }));
@@ -23,6 +23,20 @@ function allowedMembership() { mockMembershipFind.mockReturnValue({ select: () =
 beforeEach(() => { jest.clearAllMocks(); allowedMembership(); });
 
 describe('analytics access and aggregations', () => {
+  it('returns current live/upcoming counts and generated summaries using the Analytics overview', async () => {
+    mockMeetingAggregate.mockResolvedValueOnce([{ _id: 'ended', count: 1 }]).mockResolvedValueOnce([]);
+    mockParticipantAggregate.mockResolvedValue([]); mockTaskAggregate.mockResolvedValue([]);
+    mockMeetingCount.mockResolvedValueOnce(1).mockResolvedValueOnce(3);
+    mockSummaryAggregate.mockResolvedValueOnce([{ count: 2 }]);
+    const res = response(); await analyticsOverview(req(), res);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ meetings: expect.objectContaining({ live: 1, upcoming: 3 }), ai: { summariesGenerated: 2 } }));
+    const [liveFilter, scheduledFilter] = mockMeetingCount.mock.calls.map(([filter]) => filter);
+    expect(liveFilter).toMatchObject({ workspaceId: { $in: expect.any(Array) }, status: 'live' });
+    expect(scheduledFilter).toMatchObject({ status: 'scheduled', scheduledAt: { $gt: expect.any(Date) }, $or: expect.any(Array) });
+    expect(mockSummaryAggregate.mock.calls[0][0][0].$match).toMatchObject({ workspaceId: { $in: expect.any(Array) }, generationStatus: 'completed' });
+    expect(mockSummaryAggregate.mock.calls[0][0][1]).toEqual({ $group: { _id: '$meetingId' } });
+  });
+
   it('rejects an unauthorized workspace filter before querying analytics records', async () => {
     mockMembershipFind.mockReturnValue({ select: () => ({ lean: async () => [] }) });
     const res = response(); await analyticsOverview(req({ workspaceId }), res);
@@ -37,9 +51,9 @@ describe('analytics access and aggregations', () => {
 
   it('returns actual empty aggregates safely and applies an inclusive UTC date filter', async () => {
     mockMeetingAggregate.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
-    mockParticipantAggregate.mockResolvedValue([]); mockSummaryCount.mockResolvedValue(0); mockTaskAggregate.mockResolvedValue([]); mockMeetingCount.mockResolvedValue(0);
+    mockParticipantAggregate.mockResolvedValue([]); mockSummaryAggregate.mockResolvedValue([]); mockTaskAggregate.mockResolvedValue([]); mockMeetingCount.mockResolvedValue(0);
     const res = response(); await analyticsOverview(req({ from: '2026-11-01', to: '2026-11-12', workspaceId }), res);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ meetings: expect.objectContaining({ total: 0, totalDurationMs: 0, averageDurationMs: null }), attendanceRecords: 0, tasks: expect.objectContaining({ total: 0 }) }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ meetings: expect.objectContaining({ total: 0, live: 0, upcoming: 0, totalDurationMs: 0, averageDurationMs: null }), attendanceRecords: 0, ai: { summariesGenerated: 0 }, tasks: expect.objectContaining({ total: 0 }) }));
     expect(mockMeetingAggregate.mock.calls[0][0][0].$match.createdAt).toEqual({ $gte: new Date('2026-11-01T00:00:00.000Z'), $lte: new Date('2026-11-12T23:59:59.999Z') });
   });
 

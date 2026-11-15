@@ -33,6 +33,20 @@ async function scopeFor(req: Request, res: Response): Promise<AnalyticsScope | n
 
 function workspaceMatch(scope: AnalyticsScope) { return { workspaceId: { $in: scope.workspaceIds } }; }
 function createdRange(scope: AnalyticsScope) { return { createdAt: { $gte: scope.from, $lte: scope.to } }; }
+function generatedSummaryPipeline(scope: AnalyticsScope) {
+  return [
+    { $match: {
+      ...workspaceMatch(scope), ...createdRange(scope), generationStatus: 'completed',
+      $or: [
+        { overview: { $regex: /\S/ } }, { detailedSummary: { $regex: /\S/ } },
+        { discussionPoints: { $elemMatch: { $regex: /\S/ } } }, { decisions: { $elemMatch: { $regex: /\S/ } } },
+        { keyTakeaways: { $elemMatch: { $regex: /\S/ } } }, { unresolvedQuestions: { $elemMatch: { $regex: /\S/ } } },
+      ],
+    } },
+    { $group: { _id: '$meetingId' } },
+    { $count: 'count' },
+  ];
+}
 function periodExpression(groupBy: AnalyticsScope['groupBy']) {
   if (groupBy === 'month') return { $dateToString: { format: '%Y-%m', date: '$date', timezone: 'UTC' } };
   if (groupBy === 'week') return { $dateToString: { format: '%G-W%V', date: '$date', timezone: 'UTC' } };
@@ -43,24 +57,24 @@ function periodUnit(groupBy: AnalyticsScope['groupBy']) { return groupBy === 'we
 export async function analyticsOverview(req: Request, res: Response): Promise<void> {
   const scope = await scopeFor(req, res); if (!scope) return;
   const now = new Date(); const meetingFilter = { ...workspaceMatch(scope), ...createdRange(scope) };
-  const [meetingStatus, duration, attendance, summaries, taskStatuses] = await Promise.all([
+  const [meetingStatus, duration, attendance, summaries, taskStatuses, live, upcoming] = await Promise.all([
     Meeting.aggregate([{ $match: meetingFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
     Meeting.aggregate([{ $match: { ...meetingFilter, status: 'ended', startedAt: { $type: 'date' }, endedAt: { $type: 'date' }, $expr: { $gt: ['$endedAt', '$startedAt'] } } }, { $project: { durationMs: { $subtract: ['$endedAt', '$startedAt'] } } }, { $group: { _id: null, totalMs: { $sum: '$durationMs' }, averageMs: { $avg: '$durationMs' }, count: { $sum: 1 } } }]),
     MeetingParticipant.aggregate([{ $match: { joinedAt: { $gte: scope.from, $lte: scope.to } } }, { $lookup: { from: Meeting.collection.name, localField: 'meetingId', foreignField: '_id', as: 'meeting' } }, { $unwind: '$meeting' }, { $match: { 'meeting.workspaceId': { $in: scope.workspaceIds } } }, { $count: 'count' }]),
-    MeetingSummary.countDocuments({ ...workspaceMatch(scope), ...createdRange(scope), generationStatus: 'completed' }),
+    MeetingSummary.aggregate(generatedSummaryPipeline(scope)),
     WorkspaceTask.aggregate([{ $match: { ...workspaceMatch(scope), ...createdRange(scope) } }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+    Meeting.countDocuments({ ...workspaceMatch(scope), status: MeetingStatus.LIVE }),
+    Meeting.countDocuments({ ...workspaceMatch(scope), status: MeetingStatus.SCHEDULED, scheduledAt: { $gt: now }, $or: [{ endsAt: { $exists: false } }, { endsAt: null }, { endsAt: { $gt: now } }] }),
   ]);
   const counts = Object.fromEntries(meetingStatus.map((row: any) => [row._id, row.count]));
   const tasks = Object.fromEntries(taskStatuses.map((row: any) => [row._id, row.count]));
   const durationData = duration[0] || { totalMs: 0, averageMs: null, count: 0 };
   const attendanceCount = attendance[0]?.count || 0;
-  const upcomingStart = scope.from > now ? scope.from : now;
-  const upcoming = upcomingStart <= scope.to ? await Meeting.countDocuments({ ...workspaceMatch(scope), status: MeetingStatus.SCHEDULED, scheduledAt: { $gte: upcomingStart, $lte: scope.to } }) : 0;
   res.json({
     range: { from: scope.from.toISOString(), to: scope.to.toISOString() },
-    meetings: { total: Object.values(counts).reduce((sum: number, value: any) => sum + value, 0), completed: counts.ended || 0, live: counts.live || 0, upcoming, cancelled: counts.cancelled || 0, totalDurationMs: durationData.totalMs, averageDurationMs: durationData.averageMs, durationSampleCount: durationData.count },
+    meetings: { total: Object.values(counts).reduce((sum: number, value: any) => sum + value, 0), completed: counts.ended || 0, live, upcoming, cancelled: counts.cancelled || 0, totalDurationMs: durationData.totalMs, averageDurationMs: durationData.averageMs, durationSampleCount: durationData.count },
     attendanceRecords: attendanceCount,
-    ai: { summariesGenerated: summaries },
+    ai: { summariesGenerated: summaries[0]?.count || 0 },
     tasks: { total: Object.values(tasks).reduce((sum: number, value: any) => sum + value, 0), todo: tasks.TODO || 0, inProgress: tasks.IN_PROGRESS || 0, completed: tasks.DONE || 0 },
   });
 }
@@ -103,7 +117,7 @@ export async function aiAnalytics(req: Request, res: Response): Promise<void> {
   const scope = await scopeFor(req, res); if (!scope) return;
   const range = createdRange(scope);
   const [summaryMetrics, transcriptMetrics, actions, recordingMetrics] = await Promise.all([
-    MeetingSummary.aggregate([{ $match: { ...workspaceMatch(scope), ...range, generationStatus: 'completed' } }, { $group: { _id: '$meetingId' } }, { $count: 'count' }]),
+    MeetingSummary.aggregate(generatedSummaryPipeline(scope)),
     MeetingTranscript.aggregate([
       { $match: { createdAt: { $gte: scope.from, $lte: scope.to } } },
       { $lookup: { from: Meeting.collection.name, localField: 'meetingId', foreignField: '_id', as: 'meeting' } },
