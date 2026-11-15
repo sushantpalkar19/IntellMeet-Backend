@@ -8,6 +8,7 @@ import Notification from '../models/Notification.js';
 import ReminderPreference from '../models/ReminderPreference.js';
 import { localDateTimeToUtc, isValidTimeZone } from '../utils/meetingTime.js';
 import { emitUserNotification } from '../socket/index.js';
+import { generateMeetingIdentity } from '../services/meetingIdentity.js';
 
 const scheduleSchema = z.object({
   title: z.string().trim().min(1).max(200), description: z.string().trim().max(1000).optional().default(''),
@@ -24,7 +25,7 @@ const toMeeting = (meeting: any) => ({ id: String(meeting._id), workspaceId: Str
 
 async function parseSchedule(body: unknown, partial = false) {
   const parsed = (partial ? updateSchema : scheduleSchema).safeParse(body);
-  if (!parsed.success) return { error: parsed.error.issues[0]?.message || 'Invalid meeting details' } as const;
+  if (!parsed.success) return { error: parsed.error.issues.map((issue) => `${issue.path.join('.') || 'request'}: ${issue.message}`).join('; ') || 'Invalid meeting details' } as const;
   const data = parsed.data as z.infer<typeof scheduleSchema>;
   if (data.timeZone && !isValidTimeZone(data.timeZone)) return { error: 'Choose a valid IANA time zone.' } as const;
   if (partial && data.localStart === undefined && data.localEnd === undefined) return { data } as const;
@@ -62,14 +63,50 @@ export async function scheduleMeeting(req: Request, res: Response): Promise<void
   if ('error' in parsed) { fail(res, 400, parsed.error || 'Meeting details are invalid.'); return; }
   let meeting: any;
   try {
-    meeting = await Meeting.create({ workspaceId, title: parsed.data.title, description: parsed.data.description, createdBy: userId, status: MeetingStatus.SCHEDULED, scheduledAt: parsed.start, endsAt: parsed.end, timeZone: parsed.data.timeZone, meetingType: parsed.data.meetingType, agenda: parsed.data.agenda, reminderMinutes: [...new Set(parsed.data.reminderMinutes)] });
+    const identity = await generateMeetingIdentity();
+    meeting = await Meeting.create({ workspaceId, title: parsed.data.title, description: parsed.data.description, createdBy: userId, status: MeetingStatus.SCHEDULED, scheduledAt: parsed.start, endsAt: parsed.end, timeZone: parsed.data.timeZone, meetingType: parsed.data.meetingType, agenda: parsed.data.agenda, reminderMinutes: [...new Set(parsed.data.reminderMinutes)], ...identity });
     await addInvitees(meeting, userId, parsed.data.inviteeIds);
     res.status(201).json({ meeting: toMeeting(meeting) });
   } catch (error) {
-    if (meeting) { await Meeting.deleteOne({ _id: meeting._id }); await MeetingInvite.deleteMany({ meetingId: meeting._id }); await Notification.deleteMany({ meetingId: meeting._id, type: 'meeting_invitation' }); }
-    const message = (error as Error).message;
-    res.status(message.includes('invitee') ? 400 : 500).json({ error: 'Meeting scheduling failed', message: message.includes('invitee') ? message : 'Could not schedule meeting.' });
+    if (meeting) {
+      try {
+        await Meeting.deleteOne({ _id: meeting._id });
+        await MeetingInvite.deleteMany({ meetingId: meeting._id });
+        await Notification.deleteMany({ meetingId: meeting._id, type: 'meeting_invitation' });
+      } catch (cleanupError) {
+        logSchedulingError('Failed to roll back scheduled meeting', cleanupError);
+      }
+    }
+    logSchedulingError('Meeting scheduling failed', error);
+    const failure = error as Error & { code?: number; errors?: Record<string, { message: string }> };
+    if (failure instanceof mongoose.Error.ValidationError) {
+      const details = Object.values(failure.errors).map((item) => item.message).join('; ');
+      res.status(400).json({ error: 'Bad Request', message: `Meeting details are invalid: ${details}` });
+      return;
+    }
+    if (failure instanceof mongoose.Error.CastError) {
+      res.status(400).json({ error: 'Bad Request', message: 'One or more meeting identifiers or values are invalid.' });
+      return;
+    }
+    if (failure.code === 11000) {
+      res.status(409).json({ error: 'Conflict', message: 'A meeting identifier conflict occurred. Please retry.' });
+      return;
+    }
+    if (failure.message?.includes('invitee')) {
+      res.status(400).json({ error: 'Bad Request', message: failure.message });
+      return;
+    }
+    res.status(500).json({ error: 'Internal Server Error', message: 'Could not schedule meeting.' });
   }
+}
+
+function logSchedulingError(context: string, error: unknown): void {
+  const failure = error instanceof Error ? error : new Error(String(error));
+  console.error(context, {
+    name: failure.name,
+    message: failure.message,
+    ...(process.env.NODE_ENV === 'development' && failure.stack ? { stack: failure.stack } : {}),
+  });
 }
 
 export async function getCalendarMeetings(req: Request, res: Response): Promise<void> {

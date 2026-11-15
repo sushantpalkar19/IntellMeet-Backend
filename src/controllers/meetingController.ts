@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
-import { randomBytes } from 'crypto';
 import Meeting, { MeetingStatus } from '../models/Meeting.js';
 import MeetingParticipant, { ParticipantRole } from '../models/MeetingParticipant.js';
 import MeetingMessage from '../models/MeetingMessage.js';
@@ -8,6 +7,7 @@ import WorkspaceMember from '../models/WorkspaceMember.js';
 import { emitMeetingEnded, emitRecordingStatus } from '../socket/index.js';
 import { interruptHostRecording } from '../services/meetingRecordingService.js';
 import { createMeetingSchema } from '../validators/meetingValidator.js';
+import { generateMeetingIdentity } from '../services/meetingIdentity.js';
 
 /**
  * Create a new meeting
@@ -50,7 +50,7 @@ export async function createMeeting(req: Request, res: Response): Promise<void> 
     }
 
     // Create meeting
-    const codes = await generateMeetingCodes();
+    const codes = await generateMeetingIdentity();
     const meeting = new Meeting({
       workspaceId,
       title,
@@ -84,17 +84,6 @@ export async function createMeeting(req: Request, res: Response): Promise<void> 
       message: 'Failed to create meeting',
     });
   }
-}
-
-async function generateMeetingCodes(): Promise<{ meetingCode: string; joinCode: string; invitationId: string }> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const meetingCode = `IM-${randomBytes(4).toString('hex').toUpperCase()}`;
-    const joinCode = randomBytes(4).toString('hex').toUpperCase();
-    const invitationId = randomBytes(24).toString('base64url');
-    const exists = await Meeting.exists({ $or: [{ meetingCode }, { joinCode }, { invitationId }] });
-    if (!exists) return { meetingCode, joinCode, invitationId };
-  }
-  throw new Error('Could not generate a unique meeting invitation');
 }
 
 export async function getMeetingInvitation(req: Request, res: Response): Promise<void> {
